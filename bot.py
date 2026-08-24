@@ -11,15 +11,15 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "Привет! Я продвинутый ИИ-ассистент на базе Gemini 2.5 Pro. Задай мне любой вопрос!")
+    bot.reply_to(message, "Привет! Я быстрый ИИ-ассистент на базе Gemini. Задай мне вопрос!")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        # Используем мощную модель Gemini 2.5 Pro с системной инструкцией
+        # Быстрая модель с лимитом 1500 запросов в день
         response = client.models.generate_content(
-            model="gemini-2.5-pro",
+            model="gemini-2.5-flash",
             contents=message.text,
             config=types.GenerateContentConfig(
                 system_instruction="Ты умный, эрудированный и точный AI-помощник. Текущий год — 2026. Отвечай подробно, актуально и грамотно."
