@@ -4,92 +4,75 @@ import time
 import urllib.parse
 import threading
 import logging
+import requests
 from flask import Flask
 import telebot
 from telebot.apihelper import ApiTelegramException
-from openai import OpenAI
 
-# Отключаем лишний шум логов Flask
+# Отключаем лишний шум логов
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для Render 24/7
+# 1. Веб-сервер для удержания на Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "Bot is alive 24/7!"
+    return "Bot is running 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# 2. НАСТРОЙКА КЛЮЧЕЙ (вставьте сюда ваши значения)
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() or "СЮДА_ТОКЕН_БОТА"
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip() or "СЮДА_КЛЮЧ_OPENROUTER_SK_OR_V1"
-
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-)
+# 2. Инициализация Telegram
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+if not TELEGRAM_BOT_TOKEN:
+    print("❌ ОШИБКА: Задайте TELEGRAM_BOT_TOKEN в Environment на Render!")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Бесплатная и надежная модель Llama 3.3 70B на OpenRouter
-MODEL_NAME = "meta-llama/llama-3.3-70b-instruct:free"
+# 3. Полностью автономный текстовый ИИ (без ключей, без 401/402/404)
+def ask_free_ai(prompt_text):
+    """Прямой текстовый ИИ без ключей и квот"""
+    try:
+        sys_context = "Ты вежливый, умный и тактичный русскоязычный ассистент. Отвечай грамотно, четко и по делу на русском языке."
+        full_query = f"{sys_context}\n\nВопрос: {prompt_text}\nОтвет:"
+        encoded = urllib.parse.quote(full_query)
+        
+        url = f"https://text.pollinations.ai/{encoded}"
+        response = requests.get(url, timeout=25)
+        
+        if response.status_code == 200 and response.text.strip():
+            return response.text.strip()
+    except Exception as e:
+        print(f"[AI ERROR] {e}")
+    
+    return "Здравствуйте! Я получил ваш запрос, но сейчас возникли временные трудности со связью. Попробуйте еще раз через секунду."
 
-user_history = {}
-MAX_HISTORY = 6
-
-def ask_ai(messages_list):
-    """Запрос к OpenRouter"""
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages_list,
-        temperature=0.7,
-        max_tokens=1000
-    )
-    return response.choices[0].message.content.strip()
-
-# 3. Команда /start
-@bot.message_handler(commands=['start', 'help', 'reset'])
+# 4. Приветствие
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент на OpenRouter.\n\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент.\n\n"
         "💬 **Общение:** напишите мне любой вопрос.\n"
-        "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
-        "🔄 **Сброс диалога:** /reset\n\n"
+        "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n\n"
         "Чем я могу вам помочь?"
     )
 
-# 4. Генерация изображений FLUX.1
+# 5. Генерация изображений через FLUX.1
 def process_image(message, prompt):
     if not prompt:
         bot.reply_to(
             message,
-            "Пожалуйста, укажите описание изображения. Например:\n`рисуй спортивный автомобиль в ночном городе`",
+            "Пожалуйста, укажите, что нарисовать. Например:\n`рисуй спортивный автомобиль в неоновом городе`",
             parse_mode="Markdown"
         )
         return
 
     bot.send_chat_action(message.chat.id, 'upload_photo')
-
-    final_prompt = prompt
     try:
-        task = [
-            {"role": "system", "content": "You are a prompt engineer for FLUX. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
-            {"role": "user", "content": prompt}
-        ]
-        enhanced = ask_ai(task)
-        if enhanced:
-            final_prompt = enhanced
-    except Exception:
-        final_prompt = prompt
-
-    try:
-        encoded_prompt = urllib.parse.quote(final_prompt)
+        encoded_prompt = urllib.parse.quote(prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
         
         bot.send_photo(
@@ -99,65 +82,50 @@ def process_image(message, prompt):
             parse_mode="Markdown"
         )
     except Exception as e:
-        bot.reply_to(message, f"Ошибка при отправке фото: {e}")
+        bot.reply_to(message, f"Ошибка при создании изображения: {e}")
 
 @bot.message_handler(commands=['рисуй', 'нарисуй', 'draw', 'image'])
-def handle_draw_cmd(message):
+def draw_cmd(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image(message, prompt)
 
-# 5. Обработка входящих текстовых сообщений
+# 6. Обработка всех сообщений
 @bot.message_handler(func=lambda message: True)
-def handle_message(message):
+def handle_all_messages(message):
     text = message.text.strip()
 
+    # Проверка на генерацию фото без слэша
     draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
     if re.match(draw_pattern, text, re.IGNORECASE):
         prompt = re.sub(draw_pattern, "", text, flags=re.IGNORECASE).strip()
         process_image(message, prompt)
         return
 
-    user_id = message.chat.id
-    bot.send_chat_action(user_id, 'typing')
+    # Текстовый диалог
+    bot.send_chat_action(message.chat.id, 'typing')
+    answer = ask_free_ai(text)
+    bot.reply_to(message, answer)
 
-    if user_id not in user_history:
-        user_history[user_id] = []
-
-    user_history[user_id].append({"role": "user", "content": text})
-    if len(user_history[user_id]) > MAX_HISTORY:
-        user_history[user_id] = user_history[user_id][-MAX_HISTORY:]
-
-    system_instruction = {
-        "role": "system",
-        "content": "Ты воспитанный, тактичный и вежливый русскоязычный ИИ-ассистент. Всегда обращайся к пользователю уважительно на 'вы'. Отвечай емко, грамотно и по существу на чистом русском языке."
-    }
-
-    full_messages = [system_instruction] + user_history[user_id]
-
-    try:
-        reply_text = ask_ai(full_messages)
-        user_history[user_id].append({"role": "assistant", "content": reply_text})
-        bot.reply_to(message, reply_text)
-    except Exception as e:
-        bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
-
-# 6. Защищенный запуск бота на Render
+# 7. Запуск без ошибки 409
 if __name__ == "__main__":
+    # Запускаем Flask в фоне
     threading.Thread(target=run_web, daemon=True).start()
     
+    # Сбрасываем все прошлые зависшие сессии Telegram
     try:
         bot.delete_webhook(drop_pending_updates=True)
-        time.sleep(3)
+        time.sleep(2)
     except Exception:
         pass
 
-    print("🚀 Бот запущен через OpenRouter!")
+    print("🚀 Бот успешно запущен и готов к работе!")
     
     while True:
         try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
+            bot.polling(none_stop=True, interval=1, timeout=20)
         except ApiTelegramException as e:
             if e.error_code == 409:
+                # Мягкая пауза для освобождения порта/сессии на Render
                 time.sleep(5)
             else:
                 time.sleep(2)
