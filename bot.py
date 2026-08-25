@@ -29,14 +29,17 @@ def run_web():
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
+if not OPENROUTER_API_KEY:
+    print("❌ ВНИМАНИЕ: OPENROUTER_API_KEY не найден в переменных окружения Render!")
+
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
+    api_key=OPENROUTER_API_KEY or "dummy_key_to_prevent_startup_crash",
 )
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Бесплатная мощная модель DeepSeek
+# Модель DeepSeek на OpenRouter
 MODEL_NAME = "deepseek/deepseek-chat"
 
 user_history = {}
@@ -49,6 +52,9 @@ def get_current_date():
 
 def ask_ai(messages_list):
     """Запрос к нейросети через OpenRouter"""
+    if not OPENROUTER_API_KEY:
+        return "⚠️ Ошибка: В настройках Render не указан OPENROUTER_API_KEY. Пожалуйста, добавьте его в раздел Environment."
+    
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages_list
@@ -80,16 +86,17 @@ def process_image_generation(message, prompt):
     bot.send_chat_action(message.chat.id, 'upload_photo')
 
     final_prompt = prompt
-    try:
-        task = [
-            {"role": "system", "content": "You are a prompt engineer for image generators. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
-            {"role": "user", "content": prompt}
-        ]
-        enhanced = ask_ai(task)
-        if enhanced:
-            final_prompt = enhanced
-    except Exception:
-        final_prompt = prompt
+    if OPENROUTER_API_KEY:
+        try:
+            task = [
+                {"role": "system", "content": "You are a prompt engineer for image generators. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
+                {"role": "user", "content": prompt}
+            ]
+            enhanced = ask_ai(task)
+            if enhanced and not enhanced.startswith("⚠️"):
+                final_prompt = enhanced
+        except Exception:
+            final_prompt = prompt
 
     try:
         encoded_prompt = urllib.parse.quote(final_prompt)
