@@ -25,18 +25,21 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# 2. Инициализация Telegram и Gemini
+# 2. Инициализация Telegram и Google Gemini
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-if not TELEGRAM_BOT_TOKEN:
-    print("❌ КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN не найден в Environment!")
-if not GEMINI_API_KEY:
-    print("❌ КРИТИЧЕСКАЯ ОШИБКА: GEMINI_API_KEY не найден в Environment!")
-
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-pro")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+
+# Список приоритетных рабочих моделей 2.5 и 2.0
+CANDIDATE_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "models/gemini-2.5-flash",
+    "models/gemini-2.5-pro"
+]
 
 user_history = {}
 MAX_HISTORY = 4
@@ -46,13 +49,29 @@ def get_current_date():
     weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
+def ask_gemini(prompt_text):
+    """Попытка генерации ответа с перебором версий моделей 2.5"""
+    last_error = None
+    for model_name in CANDIDATE_MODELS:
+        try:
+            m = genai.GenerativeModel(model_name)
+            resp = m.generate_content(prompt_text)
+            if resp and resp.text:
+                return resp.text.strip()
+        except Exception as e:
+            last_error = e
+            # Если модель не найдена (404), пробуем следующий вариант из списка
+            if "404" in str(e) or "not found" in str(e).lower():
+                continue
+            raise e
+    raise last_error
+
 @bot.message_handler(commands=['start', 'reset'])
 def send_welcome(message):
-    print(f"📥 [TELEGRAM] Получен /start от {message.chat.id}")
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент.\n\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе моделей Gemini 2.5.\n\n"
         "💬 **Общение:** напишите мне любой вопрос.\n"
         "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
         "🔄 **Сброс диалога:** /reset\n\n"
@@ -64,20 +83,19 @@ def process_image_generation(message, prompt):
     if not prompt:
         bot.reply_to(
             message,
-            "Пожалуйста, укажите описание изображения. Например:\n`рисуй спорткар в неоновом городе`",
+            "Пожалуйста, укажите описание изображения. Например:\n`рисуй спортивный автомобиль в ночном городе`",
             parse_mode="Markdown"
         )
         return
 
-    print(f"🎨 [FLUX] Генерация фото: {prompt}")
     bot.send_chat_action(message.chat.id, 'upload_photo')
 
     final_prompt = prompt
     try:
         task = f"Translate to English photo prompt (photorealistic, 8k, lighting): '{prompt}'. Output ONLY prompt text."
-        resp = model.generate_content(task)
-        if resp and resp.text:
-            final_prompt = resp.text.strip()
+        enhanced = ask_gemini(task)
+        if enhanced:
+            final_prompt = enhanced
     except Exception:
         final_prompt = prompt
 
@@ -99,11 +117,10 @@ def handle_draw_cmd(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Обработка всех входящих сообщений
+# 4. Обработка текстовых сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
-    print(f"📥 [TELEGRAM] Новое сообщение: {text}")
 
     draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
     if re.match(draw_pattern, text, re.IGNORECASE):
@@ -131,39 +148,31 @@ def handle_message(message):
     )
 
     try:
-        response = model.generate_content(system_prompt)
-        reply_text = response.text if response.text else "Прошу прощения, не удалось получить ответ."
+        reply_text = ask_gemini(system_prompt)
         user_history[user_id].append(f"Model: {reply_text}")
         bot.reply_to(message, reply_text)
     except Exception as e:
-        print(f"⚠️ [GEMINI ERROR] {e}")
         bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
 
-# 5. Главная точка старта
+# 5. Запуск
 if __name__ == "__main__":
-    # Запускаем Flask строго в фоновом потоке
     threading.Thread(target=run_web, daemon=True).start()
     
-    # Проверяем связь с Telegram
     try:
-        bot_info = bot.get_me()
-        print(f"✅ УСПЕШНО: Бот @{bot_info.username} авторизован в Telegram!")
         bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        print(f"❌ Ошибка проверки токена бота: {e}")
+        time.sleep(1)
+    except Exception:
+        pass
 
-    print("🚀 Опрос Telegram запущен...")
+    print("🚀 Бот запущен с поддержкой моделей Gemini 2.5!")
     
     while True:
         try:
             bot.polling(none_stop=True, interval=1, timeout=20)
         except ApiTelegramException as e:
             if e.error_code == 409:
-                print("⏳ Конфликт 409. Жду 5 секунд...")
                 time.sleep(5)
             else:
-                print(f"⚠️ Ошибка polling: {e}")
                 time.sleep(2)
-        except Exception as e:
-            print(f"⚠️ Сбой: {e}")
+        except Exception:
             time.sleep(2)
