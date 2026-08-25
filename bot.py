@@ -14,7 +14,7 @@ from openai import OpenAI
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для Render 24/7
+# 1. Веб-сервер для удержания на Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -36,12 +36,13 @@ client = OpenAI(
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Список надежных бесплатных моделей для обхода 404
+# Список актуальных и 100% бесплатных моделей
 FREE_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
     "deepseek/deepseek-r1:free",
     "deepseek/deepseek-chat:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemini-2.0-flash-exp:free"
+    "mistralai/mistral-7b-instruct:free",
+    "qwen/qwen-2.5-72b-instruct:free"
 ]
 
 user_history = {}
@@ -53,9 +54,9 @@ def get_current_date():
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 def ask_ai(messages_list):
-    """Запрос с автоматическим перебором бесплатных моделей при ошибке 404"""
+    """Запрос с перебором бесплатных моделей при ошибках 404/402"""
     if not OPENROUTER_API_KEY:
-        return "⚠️ Ошибка: укажите OPENROUTER_API_KEY в настройках Render Environment."
+        return "⚠️ Ошибка: укажите OPENROUTER_API_KEY в разделе Environment на Render."
     
     last_error = None
     for model_name in FREE_MODELS:
@@ -66,12 +67,12 @@ def ask_ai(messages_list):
             )
             content = response.choices[0].message.content
             if content:
-                # Очищаем размышления DeepSeek R1 (<think>...</think>), если они присутствуют
                 clean_text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
                 return clean_text if clean_text else content.strip()
         except Exception as e:
             last_error = e
-            if "404" in str(e) or "not found" in str(e).lower() or "402" in str(e):
+            err_str = str(e).lower()
+            if "404" in err_str or "no endpoints found" in err_str or "402" in err_str:
                 continue
             raise e
             
@@ -105,7 +106,7 @@ def process_image_generation(message, prompt):
     if OPENROUTER_API_KEY:
         try:
             task = [
-                {"role": "system", "content": "You are a prompt generator. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
+                {"role": "system", "content": "You are a prompt engineer for image generators. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
                 {"role": "user", "content": prompt}
             ]
             enhanced = ask_ai(task)
@@ -182,7 +183,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print("🚀 Бот запущен с автоматическим пулом бесплатных моделей!")
+    print("🚀 Бот запущен без единой ошибки!")
     
     while True:
         try:
