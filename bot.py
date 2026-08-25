@@ -14,7 +14,7 @@ from openai import OpenAI
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для удержания на Render 24/7
+# 1. Веб-сервер для Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -36,13 +36,12 @@ client = OpenAI(
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Список актуальных и 100% бесплатных моделей
+# Список моделей: на 1-м месте универсальный бесплатный авто-роутер OpenRouter
 FREE_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "deepseek/deepseek-r1:free",
-    "deepseek/deepseek-chat:free",
-    "mistralai/mistral-7b-instruct:free",
-    "qwen/qwen-2.5-72b-instruct:free"
+    "openrouter/free",
+    "openrouter/auto",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "z-ai/glm-5.2:free"
 ]
 
 user_history = {}
@@ -54,7 +53,7 @@ def get_current_date():
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 def ask_ai(messages_list):
-    """Запрос с перебором бесплатных моделей при ошибках 404/402"""
+    """Запрос с универсальным роутером бесплатных моделей"""
     if not OPENROUTER_API_KEY:
         return "⚠️ Ошибка: укажите OPENROUTER_API_KEY в разделе Environment на Render."
     
@@ -67,11 +66,13 @@ def ask_ai(messages_list):
             )
             content = response.choices[0].message.content
             if content:
+                # Очищаем системные размышления (<think>...</think>), если они есть
                 clean_text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
                 return clean_text if clean_text else content.strip()
         except Exception as e:
             last_error = e
             err_str = str(e).lower()
+            # При любой недоступности эндпоинта пробуем следующий
             if "404" in err_str or "no endpoints found" in err_str or "402" in err_str:
                 continue
             raise e
@@ -106,7 +107,7 @@ def process_image_generation(message, prompt):
     if OPENROUTER_API_KEY:
         try:
             task = [
-                {"role": "system", "content": "You are a prompt engineer for image generators. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
+                {"role": "system", "content": "You are a prompt generator for FLUX. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
                 {"role": "user", "content": prompt}
             ]
             enhanced = ask_ai(task)
@@ -183,7 +184,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print("🚀 Бот запущен без единой ошибки!")
+    print("🚀 Бот запущен с универсальным Free Router OpenRouter!")
     
     while True:
         try:
@@ -195,3 +196,4 @@ if __name__ == "__main__":
                 time.sleep(2)
         except Exception:
             time.sleep(2)
+            
