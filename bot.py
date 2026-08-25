@@ -6,20 +6,19 @@ import threading
 from flask import Flask
 import telebot
 from google import genai
-from google.genai import types
 
 # 1. Заглушка для Render Web Service 24/7
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "Bot is alive!"
+    return "Bot is live and running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# 2. Инициализация
+# 2. Инициализация Telegram и Gemini
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -39,11 +38,11 @@ def send_welcome(message):
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Рад приветствовать вас. Я ваш персональный ИИ-ассистент.\n\n"
-        "💬 **Общение и вопросы:** просто напишите мне любое сообщение.\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент.\n\n"
+        "💬 **Общение и вопросы:** просто напишите мне сообщение.\n"
         "🎨 **Создание фото:** напишите `рисуй [описание]` или `/рисуй [описание]`\n"
-        "🔄 **Сброс контекста:** /reset\n\n"
-        "Чем я могу вам помочь?"
+        "🔄 **Сброс диалога:** /reset\n\n"
+        "Чем могу помочь вам сегодня?"
     )
 
 # 3. Генерация изображений через FLUX.1
@@ -61,8 +60,8 @@ def process_image_generation(message, prompt):
     final_prompt = prompt
     try:
         resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=f"Translate to English photo prompt (photorealistic, lighting, details): '{prompt}'. Output ONLY prompt."
+            model="gemini-1.5-flash",
+            contents=f"Translate this text to a photorealistic English prompt for FLUX (add lighting, 8k, details): '{prompt}'. Output ONLY the prompt."
         )
         if resp.text:
             final_prompt = resp.text.strip()
@@ -87,7 +86,7 @@ def handle_draw_command(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|изобрази|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Текстовые ответы с вежливым тоном и контролем квоты
+# 4. Текстовые ответы (быстрая и стабильная модель Gemini 1.5 Flash)
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
@@ -110,40 +109,29 @@ def handle_message(message):
         user_history[user_id] = user_history[user_id][-MAX_HISTORY:]
 
     system_prompt = (
-        f"Ты воспитанный, вежливый и дружелюбный русскоязычный ИИ-ассистент. "
-        f"Всегда общайся с пользователем уважительно, вежливо и тактично, обращаясь на 'вы'. "
-        f"Отвечай грамотно, емко и по существу, помогая решить вопрос наилучшим образом. "
+        f"Ты воспитанный, тактичный и вежливый русскоязычный ИИ-ассистент. "
+        f"Всегда обращайся к пользователю уважительно на 'вы'. "
+        f"Отвечай кратко, грамотно и по существу на чистом русском языке. "
         f"Сегодня {get_current_date()}, 2026 год.\n\n"
         + "\n".join(user_history[user_id])
         + "\nModel:"
     )
 
-    need_search = any(k in text.lower() for k in ["сегодня", "новости", "курс", "погода", "кто такой", "когда", "сейчас", "2026"])
-
     try:
-        config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]) if need_search else None
-
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=system_prompt,
-            config=config
+            model="gemini-1.5-flash",
+            contents=system_prompt
         )
-        reply_text = response.text if response.text else "Прошу прощения, не удалось сформировать ответ."
+        reply_text = response.text if response.text else "Прошу прощения, не удалось получить ответ."
         user_history[user_id].append(f"Model: {reply_text}")
         bot.reply_to(message, reply_text)
 
-    except Exception:
-        try:
-            fallback_response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=system_prompt
-            )
-            reply = fallback_response.text if fallback_response.text else "Готово."
-            bot.reply_to(message, reply)
-        except Exception:
-            bot.reply_to(message, "Пожалуйста, подождите около минуты — сейчас наблюдается временная нагрузка на сервер Google API.")
+    except Exception as e:
+        # Выводим реальную системную ошибку прямо в Telegram для точной диагностики
+        bot.reply_to(message, f"⚠️ Системная ошибка API:\n`{e}`", parse_mode="Markdown")
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-    print("Бот успешно запущен!")
+    print("Бот успешно запущен на Gemini 1.5 Flash!")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    
