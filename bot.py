@@ -3,16 +3,21 @@ import re
 import urllib.parse
 import datetime
 import threading
+import logging
 from flask import Flask
 import telebot
 from google import genai
 
-# 1. Заглушка для Render Web Service 24/7
+# Отключаем лишние информационные логи Flask
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
+# 1. Веб-заглушка для удержания процесса на Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "Bot is running 24/7!"
+    return "Bot is alive and running 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -25,7 +30,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Точное системное имя актуальной модели
+# Точное системное имя рабочей модели
 MODEL_NAME = "gemini-2.5-flash"
 
 user_history = {}
@@ -42,13 +47,13 @@ def send_welcome(message):
     bot.reply_to(
         message,
         "Здравствуйте! Я ваш персональный ИИ-ассистент.\n\n"
-        "💬 **Общение:** просто напишите мне любой вопрос.\n"
-        "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
+        "💬 **Общение и вопросы:** просто напишите мне любое сообщение.\n"
+        "🎨 **Создание фото:** напишите `рисуй [описание]` или `/рисуй [описание]`\n"
         "🔄 **Сброс диалога:** /reset\n\n"
         "Чем я могу вам помочь?"
     )
 
-# 3. Генерация фото через FLUX.1
+# 3. Генерация изображений через FLUX.1
 def process_image_generation(message, prompt):
     if not prompt:
         bot.reply_to(
@@ -64,7 +69,7 @@ def process_image_generation(message, prompt):
     try:
         resp = client.models.generate_content(
             model=MODEL_NAME,
-            contents=f"Translate to English detailed photo prompt for FLUX: '{prompt}'. Output ONLY prompt text."
+            contents=f"Translate to English photo prompt (photorealistic, lighting, 8k, details): '{prompt}'. Output ONLY prompt text."
         )
         if resp.text:
             final_prompt = resp.text.strip()
@@ -82,7 +87,7 @@ def process_image_generation(message, prompt):
             parse_mode="Markdown"
         )
     except Exception as e:
-        bot.reply_to(message, f"К сожалению, произошла ошибка при генерации фото: {e}")
+        bot.reply_to(message, f"К сожалению, произошла ошибка при отправке фото: {e}")
 
 @bot.message_handler(commands=['рисуй', 'нарисуй', 'изобрази', 'draw', 'image'])
 def handle_draw_command(message):
@@ -94,7 +99,7 @@ def handle_draw_command(message):
 def handle_message(message):
     text = message.text.strip()
     
-    # Обработка рисования текстом
+    # Обработка команд генерации фото без слэша
     draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
     if re.match(draw_pattern, text, re.IGNORECASE):
         prompt = re.sub(draw_pattern, "", text, flags=re.IGNORECASE).strip()
@@ -125,7 +130,7 @@ def handle_message(message):
             model=MODEL_NAME,
             contents=system_prompt
         )
-        reply_text = response.text if response.text else "Прошу прощения, не удалось сформировать ответ."
+        reply_text = response.text if response.text else "Прошу прощения, не удалось получить ответ."
         user_history[user_id].append(f"Model: {reply_text}")
         bot.reply_to(message, reply_text)
 
