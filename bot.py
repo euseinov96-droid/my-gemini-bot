@@ -14,7 +14,7 @@ import google.generativeai as genai
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для удержания на Render 24/7
+# 1. Веб-сервер для удержания процесса на Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -32,13 +32,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 genai.configure(api_key=GEMINI_API_KEY)
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Список приоритетных рабочих моделей 2.5 и 2.0
+# Список актуальных мощных моделей по вашему API
 CANDIDATE_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
-    "models/gemini-2.5-flash",
-    "models/gemini-2.5-pro"
+    "gemini-3.1-pro-preview",
+    "models/gemini-3.1-pro-preview",
+    "gemini-3.6-flash",
+    "models/gemini-3.6-flash"
 ]
 
 user_history = {}
@@ -50,7 +49,7 @@ def get_current_date():
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 def ask_gemini(prompt_text):
-    """Попытка генерации ответа с перебором версий моделей 2.5"""
+    """Генерация ответа через модели Gemini 3-го поколения"""
     last_error = None
     for model_name in CANDIDATE_MODELS:
         try:
@@ -60,7 +59,6 @@ def ask_gemini(prompt_text):
                 return resp.text.strip()
         except Exception as e:
             last_error = e
-            # Если модель не найдена (404), пробуем следующий вариант из списка
             if "404" in str(e) or "not found" in str(e).lower():
                 continue
             raise e
@@ -71,7 +69,7 @@ def send_welcome(message):
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе моделей Gemini 2.5.\n\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе модели Gemini 3.\n\n"
         "💬 **Общение:** напишите мне любой вопрос.\n"
         "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
         "🔄 **Сброс диалога:** /reset\n\n"
@@ -117,7 +115,7 @@ def handle_draw_cmd(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Обработка текстовых сообщений
+# 4. Обработка входящих текстовых сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
@@ -164,7 +162,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print("🚀 Бот запущен с поддержкой моделей Gemini 2.5!")
+    print("🚀 Бот запущен с моделью Gemini 3.1 Pro Preview!")
     
     while True:
         try:
