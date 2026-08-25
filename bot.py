@@ -1,4 +1,5 @@
 import os
+import re
 import urllib.parse
 import datetime
 import threading
@@ -7,7 +8,7 @@ import telebot
 from google import genai
 from google.genai import types
 
-# 1. Веб-заглушка для удержания порта на Render
+# 1. Веб-заглушка для Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -25,17 +26,17 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Хранилище сессий чата для каждого пользователя
 user_chats = {}
 
 def get_system_instruction():
     now = datetime.datetime.now()
     weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
     return (
-        f"Системная инструкция: Сегодня {now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}. "
-        f"Текущий год строго 2026. "
-        f"Используй Google Search для поиска актуальных фактов при необходимости. "
-        f"Отвечай емко, точно и по существу."
+        f"Системная инструкция: Ты умный русскоязычный AI-собеседник. "
+        f"Всегда отвечай на чистом, естественном и грамотном русском языке. "
+        f"Сегодня {now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}. Текущий год строго 2026. "
+        f"Используй встроенный Google Search для актуальных новостей, событий и фактов. "
+        f"Отвечай четко, емко и по существу без лишней 'воды'."
     )
 
 def get_or_create_chat(user_id):
@@ -60,28 +61,31 @@ def send_welcome(message):
     )
     bot.reply_to(
         message,
-        "Привет! Я онлайн и готов к работе.\n\n"
-        "💬 **Вопрос:** просто напиши мне текст.\n"
-        "🎨 **Картинка:** отправь `/draw описание`\n"
-        "🔄 **Сброс памяти:** /reset"
+        "Привет! Я твой русскоязычный ИИ-помощник.\n\n"
+        "💬 **Общение и поиск:** просто задай мне любой вопрос на русском.\n"
+        "🎨 **Генерация фото:** напиши `рисуй [описание]`, `нарисуй [описание]` или `/рисуй`\n"
+        "🔄 **Сброс контекста:** /reset"
     )
 
-# 3. Генерация изображений
-@bot.message_handler(commands=['draw', 'image'])
-def generate_image(message):
-    user_prompt = message.text.replace("/draw", "").replace("/image", "").strip()
-    
-    if not user_prompt:
-        bot.reply_to(message, "Укажи описание картинки. Пример:\n`/draw футуристичный город в неоновых огнях`", parse_mode="Markdown")
+# 3. Функция генерации изображений
+def process_image_generation(message, prompt):
+    if not prompt:
+        bot.reply_to(
+            message,
+            "Пожалуйста, укажи описание картинки. Например:\n`рисуй спортивный автомобиль на закате в горах`",
+            parse_mode="Markdown"
+        )
         return
-    
+
     bot.send_chat_action(message.chat.id, 'upload_photo')
-    
-    final_prompt = user_prompt
+
+    # Перевод и расширение промпта в профессиональный фото-стиль
+    final_prompt = prompt
     try:
         enhance_task = (
-            f"Translate to English and optimize as a photo generation prompt: '{user_prompt}'. "
-            f"Output ONLY the optimized prompt text without explanations."
+            f"Translate this Russian text to a detailed English photo generation prompt: '{prompt}'. "
+            f"Add photographic lighting, realistic details, high resolution. "
+            f"Output ONLY the optimized prompt text without explanations or quotes."
         )
         resp = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -90,33 +94,52 @@ def generate_image(message):
         if resp.text:
             final_prompt = resp.text.strip()
     except Exception:
-        final_prompt = user_prompt
+        final_prompt = prompt
 
     try:
         encoded_prompt = urllib.parse.quote(final_prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-        bot.send_photo(message.chat.id, image_url, caption=f"🎨 *Запрос:* {user_prompt}", parse_mode="Markdown")
+        bot.send_photo(
+            message.chat.id,
+            image_url,
+            caption=f"🎨 *Запрос:* {prompt}",
+            parse_mode="Markdown"
+        )
     except Exception as e:
         bot.reply_to(message, f"Ошибка при отправке изображения: {e}")
 
-# 4. Текстовые ответы через Chat API (корректная обработка AFC и Search)
+# Обработка команд со слэшем
+@bot.message_handler(commands=['рисуй', 'нарисуй', 'изобрази', 'draw', 'image'])
+def handle_draw_command(message):
+    prompt = re.sub(r"^/(рисуй|нарисуй|изобрази|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
+    process_image_generation(message, prompt)
+
+# 4. Обработка обычных сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
+    text = message.text.strip()
+    
+    # Проверка слов в начале обычного предложения (без слэша)
+    draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
+    if re.match(draw_pattern, text, re.IGNORECASE):
+        prompt = re.sub(draw_pattern, "", text, flags=re.IGNORECASE).strip()
+        process_image_generation(message, prompt)
+        return
+
+    # Обычный диалог на русском с поиском в Google
     user_id = message.chat.id
     bot.send_chat_action(user_id, 'typing')
-    
+
     try:
         chat = get_or_create_chat(user_id)
         response = chat.send_message(message.text)
-        
-        reply_text = response.text if response.text else "Не удалось сформировать ответ."
+        reply_text = response.text if response.text else "Не удалось получить ответ."
         bot.reply_to(message, reply_text)
     except Exception as e:
         err = str(e)
         if "429" in err:
-            bot.reply_to(message, "⚠️ Превышен лимит запросов к Google API. Подождите 1 минуту.")
+            bot.reply_to(message, "⚠️ Сработал лимит запросов к Google API. Подождите 1 минуту.")
         else:
-            # При сбое сессии сбрасываем чат для пользователя
             user_chats.pop(user_id, None)
             bot.reply_to(message, f"Ошибка: {err}")
 
