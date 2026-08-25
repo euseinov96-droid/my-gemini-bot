@@ -14,7 +14,7 @@ from openai import OpenAI
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для удержания процесса на Render 24/7
+# 1. Веб-сервер для Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -36,8 +36,13 @@ client = OpenAI(
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# 100% БЕСПЛАТНАЯ модель DeepSeek
-MODEL_NAME = "deepseek/deepseek-chat:free"
+# Список надежных бесплатных моделей для обхода 404
+FREE_MODELS = [
+    "deepseek/deepseek-r1:free",
+    "deepseek/deepseek-chat:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemini-2.0-flash-exp:free"
+]
 
 user_history = {}
 MAX_HISTORY = 6
@@ -48,22 +53,36 @@ def get_current_date():
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 def ask_ai(messages_list):
-    """Запрос к бесплатной нейросети через OpenRouter"""
+    """Запрос с автоматическим перебором бесплатных моделей при ошибке 404"""
     if not OPENROUTER_API_KEY:
         return "⚠️ Ошибка: укажите OPENROUTER_API_KEY в настройках Render Environment."
     
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages_list
-    )
-    return response.choices[0].message.content.strip()
+    last_error = None
+    for model_name in FREE_MODELS:
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages_list
+            )
+            content = response.choices[0].message.content
+            if content:
+                # Очищаем размышления DeepSeek R1 (<think>...</think>), если они присутствуют
+                clean_text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                return clean_text if clean_text else content.strip()
+        except Exception as e:
+            last_error = e
+            if "404" in str(e) or "not found" in str(e).lower() or "402" in str(e):
+                continue
+            raise e
+            
+    raise last_error
 
 @bot.message_handler(commands=['start', 'reset'])
 def send_welcome(message):
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе бесплатной модели DeepSeek.\n\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент.\n\n"
         "💬 **Общение:** напишите мне любой вопрос.\n"
         "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
         "🔄 **Сброс диалога:** /reset\n\n"
@@ -86,7 +105,7 @@ def process_image_generation(message, prompt):
     if OPENROUTER_API_KEY:
         try:
             task = [
-                {"role": "system", "content": "You are a prompt engineer for image generators. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
+                {"role": "system", "content": "You are a prompt generator. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
                 {"role": "user", "content": prompt}
             ]
             enhanced = ask_ai(task)
@@ -113,7 +132,7 @@ def handle_draw_cmd(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Обработка входящих текстовых сообщений
+# 4. Обработка текстовых сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
@@ -163,7 +182,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print("🚀 Бот запущен через OpenRouter на бесплатном DeepSeek!")
+    print("🚀 Бот запущен с автоматическим пулом бесплатных моделей!")
     
     while True:
         try:
