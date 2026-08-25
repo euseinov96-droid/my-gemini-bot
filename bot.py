@@ -10,11 +10,11 @@ import telebot
 from telebot.apihelper import ApiTelegramException
 import google.generativeai as genai
 
-# Отключаем лишний шум от Flask
+# Отключаем лишний шум Flask
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для удержания сервиса на Render
+# 1. Веб-сервер для удержания на Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -23,21 +23,19 @@ def health_check():
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    print(f"[FLASK] Сервер запущен на порту {port}")
     app.run(host="0.0.0.0", port=port)
 
-# 2. Инициализация Telegram и Google Gemini
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# 2. Инициализация Telegram и Gemini
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 if not TELEGRAM_BOT_TOKEN:
-    print("[ERROR] Не задан TELEGRAM_BOT_TOKEN!")
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN не найден в Environment!")
 if not GEMINI_API_KEY:
-    print("[ERROR] Не задан GEMINI_API_KEY!")
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: GEMINI_API_KEY не найден в Environment!")
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-pro")
-
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 user_history = {}
@@ -50,7 +48,7 @@ def get_current_date():
 
 @bot.message_handler(commands=['start', 'reset'])
 def send_welcome(message):
-    print(f"[TELEGRAM] Получена команда /start от {message.chat.id}")
+    print(f"📥 [TELEGRAM] Получен /start от {message.chat.id}")
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
@@ -61,27 +59,26 @@ def send_welcome(message):
         "Чем я могу вам помочь?"
     )
 
-# 3. Генерация картинок FLUX.1
+# 3. Генерация изображений FLUX.1
 def process_image_generation(message, prompt):
     if not prompt:
         bot.reply_to(
             message,
-            "Пожалуйста, укажите описание изображения. Например:\n`рисуй спортивный автомобиль в ночном городе`",
+            "Пожалуйста, укажите описание изображения. Например:\n`рисуй спорткар в неоновом городе`",
             parse_mode="Markdown"
         )
         return
 
-    print(f"[IMAGE] Генерация фото по запросу: {prompt}")
+    print(f"🎨 [FLUX] Генерация фото: {prompt}")
     bot.send_chat_action(message.chat.id, 'upload_photo')
 
     final_prompt = prompt
     try:
-        task = f"Translate to English detailed photo prompt for FLUX: '{prompt}'. Output ONLY prompt text."
+        task = f"Translate to English photo prompt (photorealistic, 8k, lighting): '{prompt}'. Output ONLY prompt text."
         resp = model.generate_content(task)
         if resp and resp.text:
             final_prompt = resp.text.strip()
-    except Exception as e:
-        print(f"[GEMINI PROMPT ERROR] {e}")
+    except Exception:
         final_prompt = prompt
 
     try:
@@ -97,17 +94,17 @@ def process_image_generation(message, prompt):
     except Exception as e:
         bot.reply_to(message, f"Ошибка при отправке фото: {e}")
 
-@bot.message_handler(commands=['рисуй', 'нарисуй', 'изобрази', 'draw', 'image'])
-def handle_draw_command(message):
-    prompt = re.sub(r"^/(рисуй|нарисуй|изобрази|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
+@bot.message_handler(commands=['рисуй', 'нарисуй', 'draw', 'image'])
+def handle_draw_cmd(message):
+    prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Обработка текстовых сообщений
+# 4. Обработка всех входящих сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
-    print(f"[TELEGRAM] Получено сообщение: {text}")
-    
+    print(f"📥 [TELEGRAM] Новое сообщение: {text}")
+
     draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
     if re.match(draw_pattern, text, re.IGNORECASE):
         prompt = re.sub(draw_pattern, "", text, flags=re.IGNORECASE).strip()
@@ -139,32 +136,34 @@ def handle_message(message):
         user_history[user_id].append(f"Model: {reply_text}")
         bot.reply_to(message, reply_text)
     except Exception as e:
-        print(f"[GEMINI ERROR] {e}")
+        print(f"⚠️ [GEMINI ERROR] {e}")
         bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
 
-# 5. Запуск
+# 5. Главная точка старта
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_web, daemon=True)
-    flask_thread.start()
+    # Запускаем Flask строго в фоновом потоке
+    threading.Thread(target=run_web, daemon=True).start()
     
+    # Проверяем связь с Telegram
     try:
+        bot_info = bot.get_me()
+        print(f"✅ УСПЕШНО: Бот @{bot_info.username} авторизован в Telegram!")
         bot.delete_webhook(drop_pending_updates=True)
-        time.sleep(1)
     except Exception as e:
-        print(f"[WEBHOOK RESET ERROR] {e}")
-    
-    print("[BOT] Начинаю бесконечный опрос Telegram...")
+        print(f"❌ Ошибка проверки токена бота: {e}")
+
+    print("🚀 Опрос Telegram запущен...")
     
     while True:
         try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
+            bot.polling(none_stop=True, interval=1, timeout=20)
         except ApiTelegramException as e:
             if e.error_code == 409:
-                print("[409 CONFLICT] Другой инстанс еще активен, пауза 5 секунд...")
+                print("⏳ Конфликт 409. Жду 5 секунд...")
                 time.sleep(5)
             else:
-                print(f"[TELEGRAM API ERROR] {e}")
+                print(f"⚠️ Ошибка polling: {e}")
                 time.sleep(2)
         except Exception as e:
-            print(f"[UNKNOWN ERROR] {e}")
+            print(f"⚠️ Сбой: {e}")
             time.sleep(2)
