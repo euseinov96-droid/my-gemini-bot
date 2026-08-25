@@ -1,80 +1,76 @@
 import os
 import datetime
+import threading
+from flask import Flask
 import telebot
 from google import genai
-from google.genai import types
 
+# 1. Заглушка для Render Web Service (чтобы сервис не падал)
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "Bot is running 24/7!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+# 2. Инициализация Telegram и Gemini
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Храним только последние 3 пары сообщений на пользователя
-user_histories = {}
-MAX_MESSAGES_COUNT = 6  # 3 вопроса + 3 ответа
+user_memory = {}
+MAX_MESSAGES = 4
 
-def get_system_instruction():
+def get_current_date():
     now = datetime.datetime.now()
     weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
-    weekday = weekdays[now.weekday()]
-    date_str = now.strftime("%d.%m.%Y")
-    
-    return (
-        f"Ты полезный и умный AI-собеседник. Сегодня {date_str}, {weekday}. "
-        f"Текущий год строго 2026. Отвечай кратко, по делу и информативно."
-    )
+    return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 @bot.message_handler(commands=['start', 'reset'])
 def send_welcome(message):
-    user_histories[message.chat.id] = []
-    bot.reply_to(
-        message, 
-        "Привет! Я готов к общению. Память оптимизирована для экономии лимитов.\n"
-        "Чтобы очистить историю, отправь /reset."
-    )
+    user_memory[message.chat.id] = []
+    bot.reply_to(message, "Привет! Я бот на базе Gemini. Напиши мне вопрос!\n(Сброс памяти: /reset)")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    bot.send_chat_action(message.chat.id, 'typing')
     user_id = message.chat.id
+    bot.send_chat_action(user_id, 'typing')
     
-    if user_id not in user_histories:
-        user_histories[user_id] = []
+    if user_id not in user_memory:
+        user_memory[user_id] = []
     
-    # Добавляем вопрос пользователя
-    user_histories[user_id].append(
-        types.Content(role="user", parts=[types.Part.from_text(text=message.text)])
+    user_memory[user_id].append(f"User: {message.text}")
+    if len(user_memory[user_id]) > MAX_MESSAGES:
+        user_memory[user_id] = user_memory[user_id][-MAX_MESSAGES:]
+    
+    prompt = (
+        f"Системная инструкция: Сегодня {get_current_date()}. Текущий год 2026. "
+        f"Отвечай кратко, грамотно и по делу.\n\n"
+        + "\n".join(user_memory[user_id])
+        + "\nModel:"
     )
     
-    # Оставляем строго не более 6 последних элементов (3 диалога)
-    if len(user_histories[user_id]) > MAX_MESSAGES_COUNT:
-        user_histories[user_id] = user_histories[user_id][-MAX_MESSAGES_COUNT:]
-        
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=user_histories[user_id],
-            config=types.GenerateContentConfig(
-                system_instruction=get_system_instruction()
-            )
+            contents=prompt
         )
-        
-        # Сохраняем ответ модели
-        if response.text:
-            user_histories[user_id].append(
-                types.Content(role="model", parts=[types.Part.from_text(text=response.text)])
-            )
-            bot.reply_to(message, response.text)
-        else:
-            bot.reply_to(message, "Не удалось получить ответ, попробуйте еще раз.")
-            
+        reply_text = response.text if response.text else "Нет ответа."
+        user_memory[user_id].append(f"Model: {reply_text}")
+        bot.reply_to(message, reply_text)
     except Exception as e:
-        err_text = str(e)
-        if "429" in err_text:
-            bot.reply_to(message, "⚠️ Сработал лимит запросов. Подождите 30 секунд перед следующим сообщением.")
+        err = str(e)
+        if "429" in err:
+            bot.reply_to(message, "⚠️ Лимит запросов. Подождите 1 минуту.")
         else:
-            bot.reply_to(message, f"Ошибка: {err_text}")
+            bot.reply_to(message, f"Ошибка: {err}")
 
-print("Бот успешно запущен!")
-bot.infinity_polling()
+if __name__ == "__main__":
+    threading.Thread(target=run_web, daemon=True).start()
+    print("Сервер и бот успешно запущены!")
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
