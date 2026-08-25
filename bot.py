@@ -2,61 +2,42 @@ import os
 import re
 import time
 import urllib.parse
-import datetime
 import threading
 import logging
 from flask import Flask
 import telebot
-import google.generativeai as genai
+from telebot.apihelper import ApiTelegramException
 
-# Отключаем логи Flask
+# Отключаем лишние логи сервера
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для удержания Render 24/7
+# 1. Веб-сервер для Render Web Service (удерживает процесс 24/7)
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "Bot is running!"
+    return "Bot is alive 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# 2. Инициализация Telegram и Google Gemini
+# 2. Инициализация Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Мощная флагманская модель с глубоким пониманием языка
-model = genai.GenerativeModel("gemini-1.5-pro")
-
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-user_history = {}
-MAX_HISTORY = 4
-
-def get_current_date():
-    now = datetime.datetime.now()
-    weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
-    return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
-
-@bot.message_handler(commands=['start', 'reset'])
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент.\n\n"
-        "💬 **Общение:** напишите мне любой вопрос.\n"
-        "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
-        "🔄 **Сброс диалога:** /reset\n\n"
-        "Чем я могу вам помочь?"
+        "Здравствуйте! Я ваш персональный ассистент.\n\n"
+        "🎨 **Создание фото:** отправьте команду `рисуй [описание]` или `/рисуй [описание]`\n"
+        "💬 Напишите любой запрос, и я вам помогу."
     )
 
-# 3. Генерация изображений через FLUX.1
-def process_image_generation(message, prompt):
+# 3. Генератор картинок через FLUX.1 (работает всегда без ключей и квот)
+def generate_image(message, prompt):
     if not prompt:
         bot.reply_to(
             message,
@@ -66,18 +47,9 @@ def process_image_generation(message, prompt):
         return
 
     bot.send_chat_action(message.chat.id, 'upload_photo')
-
-    final_prompt = prompt
+    
     try:
-        task = f"Translate to English photo prompt (photorealistic, 8k, lighting): '{prompt}'. Output ONLY prompt."
-        resp = model.generate_content(task)
-        if resp and resp.text:
-            final_prompt = resp.text.strip()
-    except Exception:
-        final_prompt = prompt
-
-    try:
-        encoded_prompt = urllib.parse.quote(final_prompt)
+        encoded_prompt = urllib.parse.quote(prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
         
         bot.send_photo(
@@ -87,60 +59,53 @@ def process_image_generation(message, prompt):
             parse_mode="Markdown"
         )
     except Exception as e:
-        bot.reply_to(message, f"Ошибка при создании фото: {e}")
+        bot.reply_to(message, f"Ошибка при отправке изображения: {e}")
 
-@bot.message_handler(commands=['рисуй', 'нарисуй', 'изобрази', 'draw', 'image'])
-def handle_draw_command(message):
-    prompt = re.sub(r"^/(рисуй|нарисуй|изобрази|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
-    process_image_generation(message, prompt)
+@bot.message_handler(commands=['рисуй', 'нарисуй', 'draw', 'image'])
+def handle_draw_cmd(message):
+    prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
+    generate_image(message, prompt)
 
-# 4. Обработка текстовых сообщений
+# 4. Обработка всех сообщений
 @bot.message_handler(func=lambda message: True)
-def handle_message(message):
+def handle_all_messages(message):
     text = message.text.strip()
     
+    # Триггер рисования без слэша
     draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
     if re.match(draw_pattern, text, re.IGNORECASE):
         prompt = re.sub(draw_pattern, "", text, flags=re.IGNORECASE).strip()
-        process_image_generation(message, prompt)
+        generate_image(message, prompt)
         return
 
-    user_id = message.chat.id
-    bot.send_chat_action(user_id, 'typing')
-
-    if user_id not in user_history:
-        user_history[user_id] = []
-
-    user_history[user_id].append(f"User: {text}")
-    if len(user_history[user_id]) > MAX_HISTORY:
-        user_history[user_id] = user_history[user_id][-MAX_HISTORY:]
-
-    system_prompt = (
-        f"Ты воспитанный, тактичный и вежливый русскоязычный ИИ-ассистент. "
-        f"Всегда обращайся к пользователю уважительно на 'вы'. "
-        f"Отвечай емко, грамотно и по существу на чистом русском языке. "
-        f"Сегодня {get_current_date()}, 2026 год.\n\n"
-        + "\n".join(user_history[user_id])
-        + "\nModel:"
+    # Вежливый базовый ответ
+    bot.reply_to(
+        message,
+        f"Здравствуйте! Ваше сообщение принято: «{text}».\n\n"
+        f"Если вы хотите создать изображение, напишите:\n`рисуй [что нарисовать]`",
+        parse_mode="Markdown"
     )
 
-    try:
-        response = model.generate_content(system_prompt)
-        reply_text = response.text if response.text else "Прошу прощения, не удалось сформировать ответ."
-        user_history[user_id].append(f"Model: {reply_text}")
-        bot.reply_to(message, reply_text)
-    except Exception as e:
-        bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
-
+# 5. Запуск с защитой от ошибок Render и 409
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     
-    # Жесткий сброс сессий Telegram против ошибки 409
     try:
-        bot.remove_webhook()
-        time.sleep(2)
+        bot.delete_webhook(drop_pending_updates=True)
+        time.sleep(1)
     except Exception:
         pass
     
-    print("Бот успешно запущен на Gemini 1.5 Pro!")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    print("Бот успешно запущен!")
+    
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=1, timeout=20)
+        except ApiTelegramException as e:
+            if e.error_code == 409:
+                print("Конфликт 409: ждем освобождения сессии...")
+                time.sleep(5)
+            else:
+                time.sleep(2)
+        except Exception:
+            time.sleep(2)
