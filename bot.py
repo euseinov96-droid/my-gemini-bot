@@ -30,7 +30,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Точное системное имя рабочей модели
+# Актуальная модель Gemini
 MODEL_NAME = "gemini-2.5-flash"
 
 user_history = {}
