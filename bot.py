@@ -7,18 +7,18 @@ import threading
 import logging
 from flask import Flask
 import telebot
-from google import genai
+import google.generativeai as genai
 
-# Отключаем лишние логи Flask
+# Отключаем логи Flask
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-заглушка для Render Web Service 24/7
+# 1. Веб-сервер для удержания Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "Bot is active 24/7!"
+    return "Bot is running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -28,11 +28,12 @@ def run_web():
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
-# Список рабочих моделей по приоритету
-MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+# Мощная флагманская модель с глубоким пониманием языка
+model = genai.GenerativeModel("gemini-1.5-pro")
+
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 user_history = {}
 MAX_HISTORY = 4
@@ -41,24 +42,6 @@ def get_current_date():
     now = datetime.datetime.now()
     weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
-
-def generate_gemini_response(prompt_text):
-    """Попытка генерации с перебором моделей при 404"""
-    last_err = None
-    for model_name in MODELS_TO_TRY:
-        try:
-            resp = client.models.generate_content(
-                model=model_name,
-                contents=prompt_text
-            )
-            if resp and resp.text:
-                return resp.text.strip()
-        except Exception as e:
-            last_err = e
-            if "404" in str(e) or "NOT_FOUND" in str(e):
-                continue
-            raise e
-    raise last_err
 
 @bot.message_handler(commands=['start', 'reset'])
 def send_welcome(message):
@@ -86,10 +69,10 @@ def process_image_generation(message, prompt):
 
     final_prompt = prompt
     try:
-        task = f"Translate to English photo prompt (photorealistic, 8k, detailed lighting): '{prompt}'. Output ONLY prompt text."
-        enhanced = generate_gemini_response(task)
-        if enhanced:
-            final_prompt = enhanced
+        task = f"Translate to English photo prompt (photorealistic, 8k, lighting): '{prompt}'. Output ONLY prompt."
+        resp = model.generate_content(task)
+        if resp and resp.text:
+            final_prompt = resp.text.strip()
     except Exception:
         final_prompt = prompt
 
@@ -104,7 +87,7 @@ def process_image_generation(message, prompt):
             parse_mode="Markdown"
         )
     except Exception as e:
-        bot.reply_to(message, f"К сожалению, произошла ошибка при генерации фото: {e}")
+        bot.reply_to(message, f"Ошибка при создании фото: {e}")
 
 @bot.message_handler(commands=['рисуй', 'нарисуй', 'изобрази', 'draw', 'image'])
 def handle_draw_command(message):
@@ -142,22 +125,22 @@ def handle_message(message):
     )
 
     try:
-        reply_text = generate_gemini_response(system_prompt)
+        response = model.generate_content(system_prompt)
+        reply_text = response.text if response.text else "Прошу прощения, не удалось сформировать ответ."
         user_history[user_id].append(f"Model: {reply_text}")
         bot.reply_to(message, reply_text)
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
 
-# 5. Точка входа
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     
-    # Корректный сброс висящих обновлений и вебхука
+    # Жесткий сброс сессий Telegram против ошибки 409
     try:
-        bot.delete_webhook(drop_pending_updates=True)
-        time.sleep(1)
+        bot.remove_webhook()
+        time.sleep(2)
     except Exception:
         pass
     
-    print("Бот успешно запущен и готов к работе!")
+    print("Бот успешно запущен на Gemini 1.5 Pro!")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
