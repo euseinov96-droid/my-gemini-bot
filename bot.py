@@ -9,7 +9,7 @@ from flask import Flask
 import telebot
 from google import genai
 
-# Отключаем лишние логи веб-сервера
+# Отключаем лишние логи Flask
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
@@ -31,7 +31,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Список актуальных моделей по приоритету
+# Список рабочих моделей по приоритету
 MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
 
 user_history = {}
@@ -43,7 +43,7 @@ def get_current_date():
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 def generate_gemini_response(prompt_text):
-    """Попытка генерации с автоматическим перебором рабочих моделей при 404"""
+    """Попытка генерации с перебором моделей при 404"""
     last_err = None
     for model_name in MODELS_TO_TRY:
         try:
@@ -56,7 +56,7 @@ def generate_gemini_response(prompt_text):
         except Exception as e:
             last_err = e
             if "404" in str(e) or "NOT_FOUND" in str(e):
-                continue  # Пробуем следующую модель
+                continue
             raise e
     raise last_err
 
@@ -116,7 +116,6 @@ def handle_draw_command(message):
 def handle_message(message):
     text = message.text.strip()
     
-    # Обработка команд рисования без слэша
     draw_pattern = r"^(рисуй|нарисуй|изобрази|сделай фото|сделай картинку)\s*"
     if re.match(draw_pattern, text, re.IGNORECASE):
         prompt = re.sub(draw_pattern, "", text, flags=re.IGNORECASE).strip()
@@ -149,17 +148,16 @@ def handle_message(message):
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
 
-# 5. Запуск
+# 5. Точка входа
 if __name__ == "__main__":
-    # Запускаем Flask в отдельном потоке
     threading.Thread(target=run_web, daemon=True).start()
     
-    # Сбрасываем старые вебхуки Telegram перед стартом polling (защита от ошибки 409)
+    # Корректный сброс висящих обновлений и вебхука
     try:
-        bot.remove_webhook()
+        bot.delete_webhook(drop_pending_updates=True)
         time.sleep(1)
     except Exception:
         pass
     
     print("Бот успешно запущен и готов к работе!")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
