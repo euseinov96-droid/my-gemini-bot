@@ -8,13 +8,13 @@ import logging
 from flask import Flask
 import telebot
 from telebot.apihelper import ApiTelegramException
-import google.generativeai as genai
+from openai import OpenAI
 
 # Отключаем лишний шум Flask
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для удержания процесса на Render 24/7
+# 1. Веб-сервер для Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -25,51 +25,42 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# 2. Инициализация Telegram и Google Gemini
+# 2. Инициализация Telegram и OpenRouter
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Список актуальных мощных моделей по вашему API
-CANDIDATE_MODELS = [
-    "gemini-3.1-pro-preview",
-    "models/gemini-3.1-pro-preview",
-    "gemini-3.6-flash",
-    "models/gemini-3.6-flash"
-]
+# Бесплатная мощная модель DeepSeek
+MODEL_NAME = "deepseek/deepseek-chat"
 
 user_history = {}
-MAX_HISTORY = 4
+MAX_HISTORY = 6
 
 def get_current_date():
     now = datetime.datetime.now()
     weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
-def ask_gemini(prompt_text):
-    """Генерация ответа через модели Gemini 3-го поколения"""
-    last_error = None
-    for model_name in CANDIDATE_MODELS:
-        try:
-            m = genai.GenerativeModel(model_name)
-            resp = m.generate_content(prompt_text)
-            if resp and resp.text:
-                return resp.text.strip()
-        except Exception as e:
-            last_error = e
-            if "404" in str(e) or "not found" in str(e).lower():
-                continue
-            raise e
-    raise last_error
+def ask_ai(messages_list):
+    """Запрос к нейросети через OpenRouter"""
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages_list
+    )
+    return response.choices[0].message.content.strip()
 
 @bot.message_handler(commands=['start', 'reset'])
 def send_welcome(message):
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе модели Gemini 3.\n\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе DeepSeek.\n\n"
         "💬 **Общение:** напишите мне любой вопрос.\n"
         "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
         "🔄 **Сброс диалога:** /reset\n\n"
@@ -90,8 +81,11 @@ def process_image_generation(message, prompt):
 
     final_prompt = prompt
     try:
-        task = f"Translate to English photo prompt (photorealistic, 8k, lighting): '{prompt}'. Output ONLY prompt text."
-        enhanced = ask_gemini(task)
+        task = [
+            {"role": "system", "content": "You are a prompt engineer for image generators. Translate to English detailed photo prompt (photorealistic, 8k, lighting). Output ONLY prompt text."},
+            {"role": "user", "content": prompt}
+        ]
+        enhanced = ask_ai(task)
         if enhanced:
             final_prompt = enhanced
     except Exception:
@@ -115,7 +109,7 @@ def handle_draw_cmd(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Обработка входящих текстовых сообщений
+# 4. Обработка текстовых сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
@@ -132,27 +126,30 @@ def handle_message(message):
     if user_id not in user_history:
         user_history[user_id] = []
 
-    user_history[user_id].append(f"User: {text}")
+    user_history[user_id].append({"role": "user", "content": text})
     if len(user_history[user_id]) > MAX_HISTORY:
         user_history[user_id] = user_history[user_id][-MAX_HISTORY:]
 
-    system_prompt = (
-        f"Ты воспитанный, тактичный и вежливый русскоязычный ИИ-ассистент. "
-        f"Всегда обращайся к пользователю уважительно на 'вы'. "
-        f"Отвечай емко, грамотно и по существу на чистом русском языке. "
-        f"Сегодня {get_current_date()}, 2026 год.\n\n"
-        + "\n".join(user_history[user_id])
-        + "\nModel:"
-    )
+    system_instruction = {
+        "role": "system",
+        "content": (
+            f"Ты воспитанный, тактичный и вежливый русскоязычный ИИ-ассистент. "
+            f"Всегда обращайся к пользователю уважительно на 'вы'. "
+            f"Отвечай емко, грамотно и по существу на чистом русском языке. "
+            f"Сегодня {get_current_date()}, 2026 год."
+        )
+    }
+
+    full_messages = [system_instruction] + user_history[user_id]
 
     try:
-        reply_text = ask_gemini(system_prompt)
-        user_history[user_id].append(f"Model: {reply_text}")
+        reply_text = ask_ai(full_messages)
+        user_history[user_id].append({"role": "assistant", "content": reply_text})
         bot.reply_to(message, reply_text)
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка API:\n`{e}`", parse_mode="Markdown")
 
-# 5. Запуск
+# 5. Запуск бота
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     
@@ -162,7 +159,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print("🚀 Бот запущен с моделью Gemini 3.1 Pro Preview!")
+    print("🚀 Бот запущен через OpenRouter (DeepSeek)!")
     
     while True:
         try:
