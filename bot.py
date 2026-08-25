@@ -14,7 +14,7 @@ from openai import OpenAI
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# 1. Веб-сервер для Render 24/7
+# 1. Веб-сервер для удержания процесса на Render 24/7
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,18 +29,15 @@ def run_web():
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
-if not OPENROUTER_API_KEY:
-    print("❌ ВНИМАНИЕ: OPENROUTER_API_KEY не найден в переменных окружения Render!")
-
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY or "dummy_key_to_prevent_startup_crash",
+    api_key=OPENROUTER_API_KEY or "dummy_key",
 )
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Модель DeepSeek на OpenRouter
-MODEL_NAME = "deepseek/deepseek-chat"
+# 100% БЕСПЛАТНАЯ модель DeepSeek
+MODEL_NAME = "deepseek/deepseek-chat:free"
 
 user_history = {}
 MAX_HISTORY = 6
@@ -51,9 +48,9 @@ def get_current_date():
     return f"{now.strftime('%d.%m.%Y')}, {weekdays[now.weekday()]}"
 
 def ask_ai(messages_list):
-    """Запрос к нейросети через OpenRouter"""
+    """Запрос к бесплатной нейросети через OpenRouter"""
     if not OPENROUTER_API_KEY:
-        return "⚠️ Ошибка: В настройках Render не указан OPENROUTER_API_KEY. Пожалуйста, добавьте его в раздел Environment."
+        return "⚠️ Ошибка: укажите OPENROUTER_API_KEY в настройках Render Environment."
     
     response = client.chat.completions.create(
         model=MODEL_NAME,
@@ -66,7 +63,7 @@ def send_welcome(message):
     user_history[message.chat.id] = []
     bot.reply_to(
         message,
-        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе DeepSeek.\n\n"
+        "Здравствуйте! Я ваш персональный ИИ-ассистент на базе бесплатной модели DeepSeek.\n\n"
         "💬 **Общение:** напишите мне любой вопрос.\n"
         "🎨 **Создание фото:** `рисуй [описание]` или `/рисуй [описание]`\n"
         "🔄 **Сброс диалога:** /reset\n\n"
@@ -116,7 +113,7 @@ def handle_draw_cmd(message):
     prompt = re.sub(r"^/(рисуй|нарисуй|draw|image)(@\w+)?\s*", "", message.text, flags=re.IGNORECASE).strip()
     process_image_generation(message, prompt)
 
-# 4. Обработка текстовых сообщений
+# 4. Обработка входящих текстовых сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
@@ -166,7 +163,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print("🚀 Бот запущен через OpenRouter (DeepSeek)!")
+    print("🚀 Бот запущен через OpenRouter на бесплатном DeepSeek!")
     
     while True:
         try:
